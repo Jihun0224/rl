@@ -1,0 +1,42 @@
+import json
+import numpy as np
+
+def save_matrix_to_json(matrix, filename):
+    """
+    Saves a matrix to a JSON file.
+
+    Args:
+        matrix (list of lists or numpy.ndarray): The matrix to save.
+        filename (str): The name of the file to save to.
+    """
+    if isinstance(matrix, np.ndarray):
+        matrix = matrix.tolist()  # Convert numpy array to list
+
+    with open(filename, 'w') as f:
+        json.dump(matrix, f)
+
+# Example usage:
+matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+filename = "matrix.json"
+save_matrix_to_json(matrix, filename)
+
+# Example usage with numpy array:
+matrix_np = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+filename_np = "matrix_np.json"
+save_matrix_to_json(matrix_np, filename_np)
+
+
+
+# Data to be written
+dictionary = {
+    "task name": "init-target1",
+    "data size": 100,
+    "data": "9976770500"
+}
+ 
+# Serializing json
+json_object = json.dumps(dictionary, indent=4)
+ 
+# Writing to sample.json
+with open("sample.json", "w") as outfile:
+    outfile.write(json_object)

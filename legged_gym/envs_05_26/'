@@ -1,0 +1,85 @@
+* 손 위치에 대한 노이즈 수정
+* 손에 observation noise 없앰
+* observation에 target 자세 추가
+*
+= gpu0:May15_14-02-11_ = 
+	reward:
+        hand_error = torch.square(self.hand_pos[:, :] - self.hand_target_pos[:,:])
+        * >>hand_error = torch.square(self.hand_pos[:, :] - self.hand_target_pos)
+
+	comp_obs:
+        (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
+
+= gpu0(1):May15_15-07-08_ = 
+	import legged_gym.envs.rby1.target.target_both as target_data
+	* >> import legged_gym.envs.rby1.target.target_left as target_data
+
+= gpu1:May15_14-23-24_ = 
+	comp_obs:
+         (self.dof_pos - self.dof_target_pos) * self.obs_scales.dof_pos,
+= gpu1(2):May15_15-09-25_ = 
+	import legged_gym.envs.rby1.target.target_both as target_data
+	* >> import legged_gym.envs.rby1.target.target_left as target_data
+            reaching=-0.1
+	* >>
+            reaching=-0.5
+
+
+= work =
+            termination = -0.0
+            lin_vel_z = -0.0
+            torques = -0.1e-7
+            dof_vel = -1e-4
+            dof_acc = -3.0e-7
+            reaching=-0.1
+            goal=-5.0
+
+=rby1.urdf=
+default_joint_angles={
+           'torso_0' : 0. ,   
+           'torso_1' : 0.54,               
+           'torso_2' : -1.256,         
+           'torso_3' : 0.7,       
+           'torso_4' : -0.2,     
+           'torso_5' : 0,     
+
+           'right_arm_0' : 0., 
+           'right_arm_1' : -0.43, 
+           'right_arm_2' :-0.174,                                       
+           'right_arm_3' : -1.309,                                             
+           'right_arm_4' : -0.,                              
+           'right_arm_5' : 0.174,       
+           'right_arm_6' : 0.,
+
+           'left_arm_0' : 0., 
+           'left_arm_1' : 0.43, 
+           'left_arm_2' : 0.174,                                       
+           'left_arm_3' : -1.309,                                             
+           'left_arm_4' : -0.,                              
+           'left_arm_5' : 0.174,       
+           'left_arm_6' : 0.,
+
+           'gripper_finger_r1' : 0.,                                             
+           'gripper_finger_r2' : 0.,                              
+           'gripper_finger_l1' : 0.,       
+           'gripper_finger_l2' : 0.,
+}
+
+=rby1_upper.urdf=
+default_joint_angles={
+                'right_arm_0' : -0.477, 
+                'right_arm_1' : -0.185,  
+                'right_arm_2' : -0.128,                                        
+                'right_arm_3' : -2.261,                                              
+                'right_arm_4' : -0.182,                               
+                'right_arm_5' : 1.702,       
+                'right_arm_6' : 0.,
+
+                'left_arm_0' : -0.477,  
+                'left_arm_1' : 0.185, 
+                'left_arm_2' : 0.128,                                        
+                'left_arm_3' : -2.261,                                              
+                'left_arm_4' : 0.182,                               
+                'left_arm_5' : 1.702,       
+                'left_arm_6' : 0.,
+}

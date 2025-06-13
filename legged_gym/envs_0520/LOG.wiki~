@@ -1,0 +1,254 @@
+
+task-specific domain randomization : reduce too large randomization space
+
+* 손 위치에 대한 노이즈 수정
+* 손에 observation noise 없앰
+* observation에 target 자세 추가
+* 
+* dof_acc의 reward scale을 올려보자: 가속도에 대한 penalty가 위치, 속도에 비해 큼.
+* 
+* reward model action rate 추가
+* observation test: target에 대한 pose확인
+* network size 변경 현재 actor&critic [32]	-> [128,64]
+* 
+* observation test: target에 대한 pose확인
+* network size 변경 현재 actor&critic [32]	-> [128,64]
+* 
+= May 20 =
+* target 자세에서 손이 떨리는 현상 해결 안됨().
+	(1) add_noise=False로 학습
+	(*) reward model action rate 추가
+	- action_rate=-0.01 추가로 해결 되는 것으로 보임. 학습 결과 확인 필요.
+ 
+* with action_rate 떨림은 사라졌으나 마지막 관절을 쭉 뻗지 않는 현상
+	(1) wrist reward model 추가
+* .
+= gpu0(0): = 
+            torques = -0.1e-7
+            dof_vel = -2e-4
+            dof_acc = -2.0e-7
+            target_pos_dist=-0.1
+            target_hand_dist=-5.0
+            action_rate = -0.0025
+            wrist = -0.1
+
+= gpu0(1): = 
+import legged_gym.envs.rby1.target.target_left as target_data
+
+            torques = -0.1e-7
+            dof_vel = -2e-4
+            dof_acc = -2.0e-7
+            target_pos_dist=-0.1
+            target_hand_dist=-5.0
+            action_rate = -0.0025
+            wrist = -0.1
+
+= gpu1(0): = 
+		import legged_gym.envs.rby1.target.target_left as target_data
+
+            torques = -0.1e-7
+            dof_vel = -2e-4
+            dof_acc = -3.0e-7
+            target_pos_dist=-0.1
+            target_hand_dist=-5.0
+            * action_rate = -0.005
+            * wrist = -0.1
+
+
+= May 19 =
+* target 자세에서 손이 떨리는 현상 해결 안됨.
+	- 그래픽 카드 2개 돌리는 것이 문제인가? 확인 필요
+* 손 동작에 대한 weight를 더 주고 돌려보자.
+* early termination 바꿔보자
+* 손 동작에 대한 target_default를 observation에 추가
+* num_envs를 1024로 작게 가져갔을 때, 그래픽 카드 1개씩 돌릴때 스무스한 동작? 확인 필요
+= gpu0(0):May19_17-17-27_ = 
+        self.obs_buf = torch.cat((
+                                    (self.dof_pos - self.default_dof_pos - self.dof_target_pos) * self.obs_scales.dof_pos,
+                                    self.dof_vel * self.obs_scales.dof_vel,
+                                    #(self.dof_target) * self.obs_scales.dof_target,
+                                    (self.hand_pos-self.hand_target_pos) * self.obs_scales.hand_pos,
+                                    #(self.hand_pos-self.default_hand_pos) * self.obs_scales.hand_pos,
+                                    #(self.hand_target) * self.obs_scales.hand_pos,
+                                    self.actions,
+        self.reset_buf |= dist_to_target[:] < 0.0001
+>>>
+        self.reset_buf |= dist_to_target[:] < 1e-6
+
+= gpu1(0):May19_17-19-54_ = 
+
+        self.obs_buf = torch.cat((
+                                    (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
+                                    self.dof_vel * self.obs_scales.dof_vel,
+                                    (self.dof_target) * self.obs_scales.dof_target,
+                                    (self.hand_pos-self.default_hand_pos) * self.obs_scales.hand_pos,
+                                    (self.hand_target) * self.obs_scales.hand_pos,
+                                    self.actions,
+                                    ),dim=-1)
+            observation = 62
+>>>
+            observation = 68
+
+= gpu1(0): = 
+
+= gpu1(1): = 
+ 
+
+= May 16 =
+* reaching 0.1이 0.5보다 성능이 좋음
+* iteration; 5000 정도하면 뻗는 동작은 성능이 어느정도 나옴.
+* A6000에 모델 두개씩 돌려도 정상 작동하는 듯 보임 (확인 필요)
+* target 자세에서 손이 떨리는 현상 발생
+	- (*) target 자세와 손 위치에 대한 noise 제거 (looks better)
+	- 전체 observation에 대한 noise 제거 
+	
+
+= gpu0(0): May16_16-18-09_= 
+            dof_acc = -3.0e-7
+>>>
+            dof_acc = -5.0e-7
+
+= gpu0(1): May16_16-19-38_= 
+			import legged_gym.envs.rby1.target.target_both as target_data
+>>>
+			import legged_gym.envs.rby1.target.target_left as target_data
+
+= gpu1(0): May16_16-18-23_= 
+	init pose >>> panel init pose
+
+			import legged_gym.envs.rby1.target.target_both as target_data
+>>>
+			import legged_gym.envs.rby1.target.target_left as target_data
+
+= gpu1(1): May16_16-23-12_= 
+	init pose >>> target 0 pose
+
+			import legged_gym.envs.rby1.target.target_both as target_data
+
+
+
+[ May 15 - 16 ]
+= gpu0:May15_14-02-11_ = 
+	reward:
+        hand_error = torch.square(self.hand_pos[:, :] - self.hand_target_pos[:,:])
+        * >>hand_error = torch.square(self.hand_pos[:, :] - self.hand_target_pos)
+
+	comp_obs:
+        (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
+
+= gpu0(1):May15_15-07-08_ = 
+	import legged_gym.envs.rby1.target.target_both as target_data
+	* >> import legged_gym.envs.rby1.target.target_left as target_data
+
+= gpu1:May15_14-23-24_ = 
+	comp_obs:
+         (self.dof_pos - self.dof_target_pos) * self.obs_scales.dof_pos,
+= gpu1(2):May15_15-09-25_ = 
+	import legged_gym.envs.rby1.target.target_both as target_data
+	* >> import legged_gym.envs.rby1.target.target_left as target_data
+            reaching=-0.1
+	* >>
+            reaching=-0.5
+
+= May 15 =
+* obs_buf와  privileged_obs_buf에 다른 형태로 넣고 있었음.
+	- 동일한 형태로 코드 수정
+* reward_reaching의 스케일 조정 필요해 보임.
+	- reward를 독점해 버림. 코드 수정
+
+= gpu0:May15_14-02-11_ = 
+	reward:
+        hand_error = torch.square(self.hand_pos[:, :] - self.hand_target_pos[:,:])
+        * >>hand_error = torch.square(self.hand_pos[:, :] - self.hand_target_pos)
+
+	comp_obs:
+        (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
+
+= gpu0(1):May15_15-07-08_ = 
+	import legged_gym.envs.rby1.target.target_both as target_data
+	* >> import legged_gym.envs.rby1.target.target_left as target_data
+
+= gpu1:May15_14-23-24_ = 
+	comp_obs:
+         (self.dof_pos - self.dof_target_pos) * self.obs_scales.dof_pos,
+= gpu1(2):May15_15-09-25_ = 
+	import legged_gym.envs.rby1.target.target_both as target_data
+	* >> import legged_gym.envs.rby1.target.target_left as target_data
+            reaching=-0.1
+	* >>
+            reaching=-0.5
+= gpu0:May15_14-02-11_ = 
+	reward:
+        hand_error = torch.square(self.hand_pos[:, :] - self.hand_target_pos[:,:])
+        * >>hand_error = torch.square(self.hand_pos[:, :] - self.hand_target_pos)
+
+	comp_obs:
+        (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
+
+= gpu0(1):May15_15-07-08_ = 
+
+= gpu1:May15_14-23-24_ = 
+	comp_obs:
+         (self.dof_pos - self.dof_target_pos) * self.obs_scales.dof_pos,
+= gpu1(2):May15_15-09-25_ = 
+
+
+
+= work =
+            termination = -0.0
+            lin_vel_z = -0.0
+            torques = -0.1e-7
+            dof_vel = -1e-4
+            dof_acc = -3.0e-7
+            reaching=-0.1
+            goal=-5.0
+
+=rby1.urdf=
+default_joint_angles={
+           'torso_0' : 0. ,   
+           'torso_1' : 0.54,               
+           'torso_2' : -1.256,         
+           'torso_3' : 0.7,       
+           'torso_4' : -0.2,     
+           'torso_5' : 0,     
+
+           'right_arm_0' : 0., 
+           'right_arm_1' : -0.43, 
+           'right_arm_2' :-0.174,                                       
+           'right_arm_3' : -1.309,                                             
+           'right_arm_4' : -0.,                              
+           'right_arm_5' : 0.174,       
+           'right_arm_6' : 0.,
+
+           'left_arm_0' : 0., 
+           'left_arm_1' : 0.43, 
+           'left_arm_2' : 0.174,                                       
+           'left_arm_3' : -1.309,                                             
+           'left_arm_4' : -0.,                              
+           'left_arm_5' : 0.174,       
+           'left_arm_6' : 0.,
+
+           'gripper_finger_r1' : 0.,                                             
+           'gripper_finger_r2' : 0.,                              
+           'gripper_finger_l1' : 0.,       
+           'gripper_finger_l2' : 0.,
+}
+
+=rby1_upper.urdf=
+default_joint_angles={
+                'right_arm_0' : -0.477, 
+                'right_arm_1' : -0.185,  
+                'right_arm_2' : -0.128,                                        
+                'right_arm_3' : -2.261,                                              
+                'right_arm_4' : -0.182,                               
+                'right_arm_5' : 1.702,       
+                'right_arm_6' : 0.,
+
+                'left_arm_0' : -0.477,  
+                'left_arm_1' : 0.185, 
+                'left_arm_2' : 0.128,                                        
+                'left_arm_3' : -2.261,                                              
+                'left_arm_4' : 0.182,                               
+                'left_arm_5' : 1.702,       
+                'left_arm_6' : 0.,
+}

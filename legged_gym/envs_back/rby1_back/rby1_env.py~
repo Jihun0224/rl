@@ -1,0 +1,216 @@
+
+from legged_gym.envs.base.manipulated_robot import ManipulatedRobot
+
+from isaacgym.torch_utils import *
+from isaacgym import gymtorch, gymapi, gymutil
+import torch
+import legged_gym.envs.rby1.target_points as target_data
+
+#from legged_gym.utils.draw import sphere
+
+import pdb
+
+class RBY1Robot(ManipulatedRobot):
+    
+    def _get_noise_scale_vec(self, cfg):
+        """ Sets a vector used to scale the noise added to the observations.
+            [NOTE]: Must be adapted when changing the observations structure
+
+        Args:
+            cfg (Dict): Environment config file
+
+        Returns:
+            [torch.Tensor]: Vector of scales used to multiply a uniform distribution in [-1, 1]
+        """
+        noise_vec = torch.zeros_like(self.obs_buf[0])
+        self.add_noise = self.cfg.noise.add_noise
+        noise_scales = self.cfg.noise.noise_scales
+        noise_level = self.cfg.noise.noise_level
+        noise_vec[0:self.num_actions] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        noise_vec[self.num_actions:2*self.num_actions] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
+        noise_vec[2*self.num_actions:3*self.num_actions] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        noise_vec[3*self.num_actions:3*self.num_actions+6] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        noise_vec[3*self.num_actions+6:4*self.num_actions+6] = 0. # previous actions
+        #noise_vec[3*self.num_actions+6:3*self.num_actions+12] = 0.
+        #noise_vec[3*self.num_actions+12:4*self.num_actions+12] = 0. # previous actions
+        
+        return noise_vec
+
+    def _init_foot(self):
+        self.feet_num = len(self.feet_indices)
+        
+        rigid_body_state = self.gym.acquire_rigid_body_state_tensor(self.sim)
+        self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_state)
+        self.rigid_body_states_view = self.rigid_body_states.view(self.num_envs, -1, 13)
+        self.feet_state = self.rigid_body_states_view[:, self.feet_indices, :]
+        self.feet_pos = self.feet_state[:, :, :3]
+        self.feet_vel = self.feet_state[:, :, 7:10]
+
+    def _init_target(self):
+        # load target sets
+        self.target_id=1
+        self.targets = torch.zeros(self.num_envs, self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
+        self.target_0 = torch.zeros(self.num_envs, self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
+        self.target_1 = torch.zeros(self.num_envs, self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
+        self.hand_target = torch.zeros(6, dtype=torch.float, device=self.device, requires_grad=False)
+        for i in range(14):
+            angle = target_data.mot_target0[i+6]    # +6, omitting the torso joints
+            self.target_0[:,i] = angle
+        for i in range(14):
+            angle = target_data.mot_target1[i+6]
+            self.target_1[:,i] = angle
+
+        # setting the target
+        print('====[ TARGET NUM : ',self.cfg.env.task_num,' ]====')
+        if self.cfg.env.task_num==0:
+            print('====[ TASK NUM : 0 ]====')
+            self.targets = self.target_0.clone().detach()
+        else:
+            print('====[ TASK NUM : 1 ]====')
+            self.targets = self.target_1.clone().detach()
+
+        for i in range(6):
+            if self.cfg.env.task_num==0:
+                angle = target_data.hand_target0[i]    # hand target
+                self.hand_target[i] = angle
+            else:
+                angle = target_data.hand_target1[i]    # hand target
+                self.hand_target[i] = angle
+
+
+    def _init_hand(self):
+        self.hand_num = len(self.hand_indices)
+        
+        rigid_body_state = self.gym.acquire_rigid_body_state_tensor(self.sim)
+        self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_state)
+        self.rigid_body_states_view = self.rigid_body_states.view(self.num_envs, -1, 13)
+        self.hand_state = self.rigid_body_states_view[:, self.hand_indices, :]
+        self.hand_pos = self._global2local(self.hand_state[:, :, :3],6)  # dim=6 for two hands
+        self.hand_vel = self.hand_state[:, :, 7:10]
+
+    def _global2local(self,body_state,dim):
+        state=body_state.clone().detach()
+        for i in range(self.num_envs):
+            state[i,0,:] -= self.env_origins[i]
+            state[i,1,:] -= self.env_origins[i]
+        return state.reshape(self.num_envs,dim) 
+        
+    def _init_buffers(self):
+        self._init_hand()
+        super()._init_buffers()
+        self._init_foot()
+        self._init_target()
+        #self._init_serial()
+
+    def update_feet_state(self):
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        
+        self.feet_state = self.rigid_body_states_view[:, self.feet_indices, :]
+        self.feet_pos = self.feet_state[:, :, :3]
+        self.feet_vel = self.feet_state[:, :, 7:10]
+
+    def update_hand_state(self):
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        
+        self.hand_state = self.rigid_body_states_view[:, self.hand_indices, :]
+        self.hand_pos = self._global2local(self.hand_state[:, :, :3],6)
+        self.hand_vel = self.hand_state[:, :, 7:10]
+
+    def check_termination(self):
+        # [early termination] the case when the current pose is similar to the target
+        dist_to_target=torch.sum(torch.square(self.dof_pos[:, :] - self.targets), dim=1)
+        self.reset_buf |= dist_to_target[:] < 0.001
+        
+        return super().check_termination()
+
+        
+    def _post_physics_step_callback(self):
+        self.update_feet_state()
+        self.update_hand_state()
+
+        #sph=Sphere(0.5,[1.0,0,1.0])
+        #sph.draw()
+
+        #jperiod = 0.8
+        #joffset = 0.5
+        #jself.phase = (self.episode_length_buf * self.dt) % period / period
+        #jself.phase_left = self.phase
+        #jself.phase_right = (self.phase + offset) % 1
+        #jself.leg_phase = torch.cat([self.phase_left.unsqueeze(1), self.phase_right.unsqueeze(1)], dim=-1)
+        
+        return super()._post_physics_step_callback()
+    
+    
+    def compute_observations(self):
+        """ Computes observations
+        """
+        self.obs_buf = torch.cat((
+                                    #(self.dof_pos - self.default_dof_pos - self.targets) * self.obs_scales.dof_pos,
+                                    (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
+                                    self.dof_vel * self.obs_scales.dof_vel,
+                                    (self.targets) * self.obs_scales.dof_pos,
+                                    (self.hand_pos-self.hand_target) * self.obs_scales.dof_pos,
+                                    #(self.hand_pos) * self.obs_scales.hand_pos,
+                                    #(self.hand_target) * self.obs_scales.hand_pos,
+                                    self.actions,
+                                    ),dim=-1)
+        self.privileged_obs_buf = torch.cat((  
+                                    #(self.dof_pos - self.default_dof_pos - self.targets) * self.obs_scales.dof_pos,
+                                    (self.dof_pos - self.targets) * self.obs_scales.dof_pos,
+                                    self.dof_vel * self.obs_scales.dof_vel,
+                                    (self.targets) * self.obs_scales.dof_pos,
+                                    (self.hand_pos-self.hand_target) * self.obs_scales.dof_pos,
+                                    #(self.hand_pos) * self.obs_scales.hand_pos,
+                                    #(self.hand_target) * self.obs_scales.hand_pos,
+                                    self.actions,
+                                    ),dim=-1)
+        # add perceptive inputs if not blind
+        # add noise if needed
+        if self.add_noise:
+            self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
+
+    def _reward_reaching(self):
+        pos_error = torch.square(self.dof_pos[:, :] - self.targets)
+        return torch.sum(pos_error, dim=(1))
+
+    def _reward_wrist(self):
+        pos_error = torch.square(self.dof_pos[:, 5] - self.targets[:,5])
+        pos_error += torch.square(self.dof_pos[:, 5+7] - self.targets[:,5+7])
+        return pos_error
+
+    def _reward_approaching(self):
+        pos_error = torch.square(self.dof_pos[:, :] - self.targets)
+        last_pos_error = torch.square(self.last_dof_pos[:, :] - self.targets)
+        return torch.sum(last_pos_error[:]-pos_error[:],dim=1)
+
+    def _reward_hand_pos(self):
+        hand_error = torch.square(self.hand_pos[:, :] - self.hand_target)
+        return torch.sum(hand_error, dim=(1))
+
+    def _reward_hand_pos_left(self):
+        hand_error = torch.square(self.hand_pos[:, :3] - self.hand_target[:,:3])
+        return torch.sum(hand_error, dim=(1))
+
+    def _reward_hand_pos_right(self):
+        hand_error = torch.square(self.hand_pos[:, 3:6] - self.hand_target[:,3:6])
+        return torch.sum(hand_error, dim=(1))
+
+    def _reward_obstacle(self):
+        obs_height=torch.sum(torch.square(self.hand_pos[:, 2] - self.cfg.rewards.h_obstacle), dim=1)
+        return 100.0 * obs_height[:] < 0
+
+    def _reward_reaching_vel(self):
+        pos_error = torch.square(self.dof_pos[:, :] - self.targets)
+        print('close enough : ',torch.sum(pos_error, dim=(1)) < 0.01)
+        return self.dof_vel * torch.sum(pos_error, dim=(1)) < self.cfg.rewards.goal_reach_threshold
+        
+    def _reward_contact_no_vel(self):
+        # Penalize contact with no velocity
+        contact = torch.norm(self.contact_forces[:, self.feet_indices, :3], dim=2) > 1.
+        contact_feet_vel = self.feet_vel * contact.unsqueeze(-1)
+        penalize = torch.square(contact_feet_vel[:, :, :3])
+        return torch.sum(penalize, dim=(1,2))
+    
+    def _reward_hip_pos(self):
+        return torch.sum(torch.square(self.dof_pos[:,[1,2,7,8]]), dim=1)
+    
